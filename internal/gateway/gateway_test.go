@@ -1,7 +1,11 @@
 package gateway
 
 import (
+	"bytes"
+	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -217,6 +221,22 @@ func TestShutdown_WithBackends(t *testing.T) {
 		{Name: "b2", Client: nil},
 	}
 	gw.Shutdown()
+}
+
+func TestServeStdioWithIOReturnsOnEOF(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	cfg := &GatewayConfig{Transport: TransportStdio}
+	gw := NewGateway(cfg)
+	gw.mcpServer = newTestMCPServer()
+
+	var stdout bytes.Buffer
+	if err := gw.serveStdioWithIO(ctx, strings.NewReader(""), &stdout); err != nil {
+		t.Fatalf("serveStdioWithIO returned error on EOF: %v", err)
+	}
 }
 
 func newTestMCPServer() *server.MCPServer {

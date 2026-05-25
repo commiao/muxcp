@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -45,14 +46,13 @@ func main() {
 
 	gw := gateway.NewGateway(cfg)
 
-	if err := gw.Start(ctx); err != nil {
+	if err := gw.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		gw.Shutdown()
 		cancel()
 		slog.Error("gateway error", "error", err)
 		os.Exit(1) //nolint:gocritic // intentional exit on startup failure
 	}
 
-	<-ctx.Done()
 	slog.Info("shutting down...")
 	gw.Shutdown()
 }
