@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"os/exec"
 	"sync"
+	"syscall"
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
@@ -43,10 +46,33 @@ func (b *Backend) connect(ctx context.Context) error {
 	switch b.Config.Transport {
 	case TransportStdio:
 		env := buildEnv(b.Config.Env)
-		c, err = client.NewStdioMCPClient(b.Config.Command, env, b.Config.Args...)
-		if err != nil {
-			return fmt.Errorf("creating stdio client: %w", err)
+
+		// NOTE: We deliberately avoid client.NewStdioMCPClient here.
+		// That helper internally calls stdioTransport.Start(context.Background()),
+		// which detaches the child process from muxcp's own signal-aware ctx.
+		// The consequence is a child-process leak: when muxcp exits (SIGTERM
+		// from its client or the parent going away) the child never receives
+		// SIGKILL and gets re-parented to launchd (PID 1) on macOS.
+		//
+		// By constructing the transport directly and calling Start(ctx) with
+		// muxcp's own ctx, exec.CommandContext will terminate the child as
+		// soon as ctx is cancelled (SIGKILL on Unix). We also set Setpgid so
+		// the child owns its own process group, keeping the door open for
+		// killpg-style cleanup in the future.
+		cmdFunc := func(cmdCtx context.Context, command string, cmdEnv []string, args []string) (*exec.Cmd, error) {
+			cmd := exec.CommandContext(cmdCtx, command, args...)
+			cmd.Env = append(os.Environ(), cmdEnv...)
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			return cmd, nil
 		}
+		stdioTransport := transport.NewStdioWithOptions(
+			b.Config.Command, env, b.Config.Args,
+			transport.WithCommandFunc(cmdFunc),
+		)
+		if err := stdioTransport.Start(ctx); err != nil {
+			return fmt.Errorf("starting stdio transport: %w", err)
+		}
+		c = client.NewClient(stdioTransport)
 
 	case TransportSSE:
 		opts := buildSSEOpts(b.Config.Headers)
