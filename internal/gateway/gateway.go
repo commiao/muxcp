@@ -3,7 +3,9 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 
@@ -60,7 +62,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// Start the appropriate transport
 	switch g.config.Transport {
 	case TransportStdio:
-		return g.serveStdio()
+		return g.serveStdio(ctx)
 	case TransportSSE:
 		return g.serveSSE()
 	case TransportStreamableHTTP:
@@ -122,9 +124,14 @@ func (g *Gateway) makeHandler(nsName string) server.ToolHandlerFunc {
 	}
 }
 
-func (g *Gateway) serveStdio() error {
+func (g *Gateway) serveStdio(ctx context.Context) error {
+	return g.serveStdioWithIO(ctx, os.Stdin, os.Stdout)
+}
+
+func (g *Gateway) serveStdioWithIO(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
 	slog.Info("gateway serving on stdio")
-	return server.ServeStdio(g.mcpServer)
+	stdioServer := server.NewStdioServer(g.mcpServer)
+	return stdioServer.Listen(ctx, stdin, stdout)
 }
 
 func (g *Gateway) serveSSE() error {

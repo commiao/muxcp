@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/moray95/muxcp/internal/gateway"
 )
@@ -43,16 +45,43 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	if cfg.Transport == gateway.TransportStdio {
+		go watchParent(ctx, cancel, os.Getppid, func() {
+			time.AfterFunc(5*time.Second, func() {
+				slog.Error("forcing shutdown after parent process exited")
+				os.Exit(0)
+			})
+		})
+	}
+
 	gw := gateway.NewGateway(cfg)
 
-	if err := gw.Start(ctx); err != nil {
+	if err := gw.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		gw.Shutdown()
 		cancel()
 		slog.Error("gateway error", "error", err)
 		os.Exit(1) //nolint:gocritic // intentional exit on startup failure
 	}
 
-	<-ctx.Done()
 	slog.Info("shutting down...")
 	gw.Shutdown()
+}
+
+func watchParent(ctx context.Context, cancel context.CancelFunc, getppid func() int, onOrphan func()) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if getppid() == 1 {
+				slog.Warn("parent process exited; shutting down stdio gateway")
+				cancel()
+				onOrphan()
+				return
+			}
+		}
+	}
 }
