@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -72,6 +73,9 @@ func (b *Backend) connect(ctx context.Context) error {
 		if err := stdioTransport.Start(ctx); err != nil {
 			return fmt.Errorf("starting stdio transport: %w", err)
 		}
+		// mcp-go creates a stderr pipe but does not consume it. A chatty server
+		// can fill the pipe and block before it sends its next MCP response.
+		go io.Copy(io.Discard, stdioTransport.Stderr())
 		c = client.NewClient(stdioTransport)
 
 	case TransportSSE:

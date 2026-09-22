@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,34 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
+
+func TestStdioStderrHelperProcess(t *testing.T) {
+	if os.Getenv("MUXCP_TEST_STDERR_FLOOD") != "1" {
+		return
+	}
+	_, _ = os.Stderr.Write(bytes.Repeat([]byte("x"), 256*1024))
+	s := server.NewMCPServer("stderr-test", "1.0.0", server.WithToolCapabilities(false))
+	s.AddTools(echoTool())
+	_ = server.NewStdioServer(s).Listen(context.Background(), os.Stdin, os.Stdout)
+}
+
+func TestBackendStdioDrainsStderr(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	b, err := NewBackend(ctx, ServerInstanceConfig{
+		Name: "stderr-test", Transport: TransportStdio, Command: os.Args[0],
+		Args: []string{"-test.run=^TestStdioStderrHelperProcess$"},
+		Env: map[string]string{"MUXCP_TEST_STDERR_FLOOD": "1"},
+	})
+	if err != nil {
+		t.Fatalf("stderr flood blocked MCP initialization: %v", err)
+	}
+	defer b.Close()
+	result, err := b.CallTool(ctx, "echo", map[string]any{"message": "ok"})
+	if err != nil || result.IsError {
+		t.Fatalf("tool call after stderr flood: result=%v err=%v", result, err)
+	}
+}
 
 // startTestMCPServer starts a simple MCP server using httptest and returns the URL.
 func startTestMCPServer(t *testing.T, tools ...server.ServerTool) string {
